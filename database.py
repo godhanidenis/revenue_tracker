@@ -19,7 +19,12 @@ from config import DATABASE_URL
 
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
+    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
+    pool_size=2,
+    max_overflow=1,     # 3 max connections
+    pool_timeout=10,
+    pool_recycle=600,
+    pool_pre_ping=True,
 )
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()

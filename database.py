@@ -19,7 +19,11 @@ from config import DATABASE_URL
 
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
+    connect_args=(
+        {"check_same_thread": False}
+        if "sqlite" in DATABASE_URL
+        else {"options": "-c application_name=revenue_tracker_prod"}
+    ),
     pool_size=2,
     max_overflow=1,     # 3 max connections
     pool_timeout=10,

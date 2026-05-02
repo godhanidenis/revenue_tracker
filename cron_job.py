@@ -1,25 +1,19 @@
 """
 cron_job.py
+Fetches previous day's AdMob and Google Ads data and stores in database.
+Run by cron once a day — executes and exits.
 
-Runs as a background process. Every day at FETCH_HOUR:FETCH_MINUTE
-it pulls the previous day's data from AdMob and Google Ads, then
-stores it in the database.
-
-Usage:
-    python cron_job.py            # runs forever (use systemd / pm2 / nohup)
-    python cron_job.py --backfill 2024-01-01 2024-03-31   # backfill a range
+Crontab:
+    30 19 * * * cd /home/flyontech/revenue_tracker && /home/flyontech/revenue_tracker/venv/bin/python3 cron_job.py
 """
 
 import argparse
 import logging
-import sys
 from datetime import date, datetime, timedelta
 
 import pytz
-import schedule
-import time
 
-from config import FETCH_HOUR, FETCH_MINUTE, TIMEZONE
+from config import TIMEZONE
 from database import init_db, upsert_admob, upsert_google_ads, log_fetch
 from fetchers import fetch_admob_day, fetch_google_ads_day
 
@@ -57,47 +51,23 @@ def fetch_for_date(target: date):
         logger.error(f"  Google Ads ✗  {e}")
 
 
-def daily_job():
-    tz = pytz.timezone(TIMEZONE)
-    yesterday = datetime.now(tz).date() - timedelta(days=1)
-    fetch_for_date(yesterday)
-
-
-def backfill(start_str: str, end_str: str):
-    start = date.fromisoformat(start_str)
-    end   = date.fromisoformat(end_str)
-    current = start
-    while current <= end:
-        fetch_for_date(current)
-        current += timedelta(days=1)
-    logger.info("Backfill complete.")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="AdMob + Google Ads data fetcher")
-    parser.add_argument("--backfill", nargs=2, metavar=("START", "END"),
-                        help="Backfill date range YYYY-MM-DD YYYY-MM-DD")
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--backfill", nargs=2, metavar=("START", "END"))
     args = parser.parse_args()
 
     init_db()
-    logger.info("Database initialised.")
 
     if args.backfill:
-        backfill(*args.backfill)
-        sys.exit(0)
-
-    fetch_time = f"{FETCH_HOUR:02d}:{FETCH_MINUTE:02d}"
-    logger.info(f"Scheduler started — will fetch daily at {fetch_time} ({TIMEZONE})")
-
-    schedule.every().day.at(fetch_time).do(daily_job)
-
-    # Also run once immediately if no data for yesterday
-    daily_job()
-
-    while True:
-        schedule.run_pending()
-        time.sleep(30)
-
-
-if __name__ == "__main__":
-    main()
+        start   = date.fromisoformat(args.backfill[0])
+        end     = date.fromisoformat(args.backfill[1])
+        current = start
+        while current <= end:
+            fetch_for_date(current)
+            current += timedelta(days=1)
+        logger.info("Backfill complete.")
+    else:
+        tz        = pytz.timezone(TIMEZONE)
+        yesterday = datetime.now(tz).date() - timedelta(days=1)
+        fetch_for_date(yesterday)
+        logger.info("Done.")

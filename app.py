@@ -8,6 +8,7 @@ import streamlit as st
 import pandas as pd
 
 from fetchers.admob_fetcher import fetch_admob_apps
+from fetchers import fetch_admob_day, fetch_google_ads_day
 from database import (
     init_db,
     get_currency_config, update_currency_config,
@@ -15,6 +16,7 @@ from database import (
     effective_rate,
     get_overall_summary, get_monthly_summary, get_daywise_for_month,
     get_last_fetch_logs,
+    upsert_admob, upsert_google_ads, log_fetch,
 )
 
 st.set_page_config(
@@ -462,6 +464,16 @@ header[data-testid="stHeader"]{{
 .rc-g{{background:{BLUE_LIGHT};color:{BLUE};border:1px solid {BLUE_MID}}}
 .rc-c{{background:{GREEN_BG};color:{GREEN};border:1px solid #a7f3d0}}
 
+/* Fetch button — small icon button */
+.tbl-outer [data-testid="stBaseButton-primary"] button,
+.tbl-outer [data-testid="stBaseButton-secondary"] button{{
+    min-height:28px!important;
+    height:28px!important;
+    padding:0 8px!important;
+    font-size:.78rem!important;
+    border-radius:6px!important;
+    margin-top:10px!important;
+}}
 /* Month row toggle button */
 .tbl-outer [data-testid="stButton"] button{{
     background:none!important;
@@ -803,25 +815,53 @@ for _, mrow in monthly_df.iterrows():
             fd.update_layout(**ld)
             st.plotly_chart(fd, use_container_width=True, config={"displayModeBar": False})
 
-            tbl = day_df[["date","revenue","spend","profit","ecpm",
-                           "impressions","clicks_admob","clicks_gads",
-                           "conversions","ctr","match_rate"]].copy()
-            tbl["date"]        = tbl["date"].dt.strftime("%d %b %Y")
-            tbl["revenue"]     = tbl["revenue"].map(lambda x: f"{sym}{x:,.4f}")
-            tbl["spend"]       = tbl["spend"].map(lambda x: f"{sym}{x:,.4f}")
-            tbl["profit"]      = tbl["profit"].map(lambda x: f"{sym}{x:,.4f}")
-            tbl["ecpm"]        = tbl["ecpm"].map(lambda x: f"{sym}{x:,.4f}")
-            tbl["impressions"] = tbl["impressions"].map(lambda x: f"{int(x):,}")
-            tbl["clicks_admob"]= tbl["clicks_admob"].map(lambda x: f"{int(x):,}")
-            tbl["clicks_gads"] = tbl["clicks_gads"].map(lambda x: f"{int(x):,}")
-            tbl["conversions"] = tbl["conversions"].map(lambda x: f"{x:,.1f}")
-            tbl["ctr"]         = tbl["ctr"].map(lambda x: f"{x:.2f}%")
-            tbl["match_rate"]  = tbl["match_rate"].map(lambda x: f"{x:.1f}%")
-            tbl.columns = ["Date",f"Revenue ({disp})",f"Spend ({disp})",f"Profit ({disp})",
-                           f"eCPM ({disp})","Impressions","Ad Clicks",
-                           "Spend Clicks","Conversions","CTR","Match Rate"]
-            st.dataframe(tbl, use_container_width=True, hide_index=True)
+            # ── Day-wise rows with fetch button for missing days ──────────
+            day_hdr = st.columns([1.2, 1.1, 1.1, 1.1, 1.0, 0.9, 0.9, 0.8, 0.8, 0.6])
+            _DTH = f"font-size:.58rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:{GRAY_400};padding:6px 0 4px;display:block;border-bottom:1px solid {BORDER}"
+            for _i, _lbl in enumerate(["Date", f"Revenue", f"Spend", f"Profit",
+                                        "eCPM", "Impressions", "Ad Clicks", "Conv", "CTR", "Fetch"]):
+                with day_hdr[_i]:
+                    st.markdown(f'<span style="{_DTH}">{_lbl}</span>', unsafe_allow_html=True)
 
+            for _, drow in day_df.iterrows():
+                _d       = drow["date"].date() if hasattr(drow["date"], "date") else drow["date"]
+                _missing = drow["revenue"] == 0 and drow["spend"] == 0
+                _is_past = _d < date.today()
+                _dc      = st.columns([1.2, 1.1, 1.1, 1.1, 1.0, 0.9, 0.9, 0.8, 0.8, 0.6])
+                _pcolor  = GREEN if drow["profit"] >= 0 else RED
+                _VS      = f"font-size:.78rem;font-family:'DM Mono',monospace;padding:8px 0;display:block;color:{GRAY_700}"
+                _VSR     = _VS
+
+                with _dc[0]: st.markdown(f'<span style="{_VS};color:{GRAY_800};font-weight:500">{drow["date"].strftime("%d %b")}</span>', unsafe_allow_html=True)
+                with _dc[1]: st.markdown(f'<span style="{_VS};color:{BLUE}">{sym}{drow["revenue"]:,.2f}</span>', unsafe_allow_html=True)
+                with _dc[2]: st.markdown(f'<span style="{_VS};color:{AMBER}">{sym}{drow["spend"]:,.2f}</span>', unsafe_allow_html=True)
+                with _dc[3]: st.markdown(f'<span style="{_VS};color:{_pcolor}">{sym}{drow["profit"]:,.2f}</span>', unsafe_allow_html=True)
+                with _dc[4]: st.markdown(f'<span style="{_VS}">{sym}{drow["ecpm"]:,.3f}</span>', unsafe_allow_html=True)
+                with _dc[5]: st.markdown(f'<span style="{_VS}">{int(drow["impressions"]):,}</span>', unsafe_allow_html=True)
+                with _dc[6]: st.markdown(f'<span style="{_VS}">{int(drow["clicks_admob"]):,}</span>', unsafe_allow_html=True)
+                with _dc[7]: st.markdown(f'<span style="{_VS}">{drow["conversions"]:,.1f}</span>', unsafe_allow_html=True)
+                with _dc[8]: st.markdown(f'<span style="{_VS}">{drow["ctr"]:.2f}%</span>', unsafe_allow_html=True)
+                with _dc[9]:
+                    if _is_past and _missing:
+                        if st.button("⬇", key=f"fd_{ym}_{_d}", help=f"Fetch {_d.strftime('%d %b %Y')}",
+                                     type="primary"):
+                            with st.spinner(f"Fetching {_d.strftime('%d %b %Y')}…"):
+                                _app_id = cfg.get("admob_app_id", "ALL")
+                                try:
+                                    upsert_admob(fetch_admob_day(_d, app_id=_app_id))
+                                    log_fetch(_d, "admob", "success")
+                                except Exception as _e:
+                                    log_fetch(_d, "admob", "error", str(_e))
+                                try:
+                                    upsert_google_ads(fetch_google_ads_day(_d))
+                                    log_fetch(_d, "google_ads", "success")
+                                except Exception as _e:
+                                    log_fetch(_d, "google_ads", "error", str(_e))
+                            st.rerun()
+                    else:
+                        st.markdown(f'<span style="color:{GRAY_300};font-size:.75rem;padding:8px 0;display:block">—</span>', unsafe_allow_html=True)
+
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
             csv = day_df.to_csv(index=False).encode("utf-8")
             st.download_button(f"↓ Download {mrow['month_label']} CSV",
                                data=csv, file_name=f"revenue_{ym}.csv",
@@ -841,8 +881,7 @@ if show_logs:
     else: st.dataframe(logs, use_container_width=True, hide_index=True)
 
 st.markdown(
-    f'<div class="pg-footer">Revenue Intelligence'
+    f'<div class="pg-footer">Revenue Dashboard'
     f'<span style="margin:0 6px">·</span>Revenue in USD · Spend in INR'
-    f'<span style="margin:0 6px">·</span>Data refreshes daily at 01:00 IST'
     f'</div>', unsafe_allow_html=True
 )

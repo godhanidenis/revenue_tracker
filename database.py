@@ -9,7 +9,6 @@ Currency logic:
 """
 from datetime import date, datetime
 from calendar import monthrange
-import logging
 import pandas as pd
 from sqlalchemy import (
     Column, Date, Float, Integer, String,
@@ -18,20 +17,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import declarative_base, sessionmaker
 from config import DATABASE_URL
 
-logger = logging.getLogger(__name__)
-
 engine = create_engine(
     DATABASE_URL,
-    connect_args=(
-        {"check_same_thread": False}
-        if "sqlite" in DATABASE_URL
-        else {"options": "-c application_name=revenue_tracker_prod"}
-    ),
-    pool_size=2,
-    max_overflow=1,
-    pool_timeout=10,
-    pool_recycle=300,   # 5 min — prevents SSL drop errors
-    pool_pre_ping=True,
+    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
 )
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
@@ -43,10 +31,10 @@ class AdMobDaily(Base):
     __tablename__ = "admob_daily"
     id                 = Column(Integer, primary_key=True)
     date               = Column(Date, unique=True, nullable=False, index=True)
-    estimated_earnings = Column(Float, default=0.0)
+    estimated_earnings = Column(Float, default=0.0)   # always USD
     impressions        = Column(Integer, default=0)
     clicks             = Column(Integer, default=0)
-    ecpm_usd           = Column(Float, default=0.0)
+    ecpm_usd           = Column(Float, default=0.0)   # always USD
     ad_requests        = Column(Integer, default=0)
     match_rate         = Column(Float, default=0.0)
     fetched_at         = Column(String)
@@ -56,12 +44,12 @@ class GoogleAdsDaily(Base):
     __tablename__ = "google_ads_daily"
     id           = Column(Integer, primary_key=True)
     date         = Column(Date, unique=True, nullable=False, index=True)
-    cost         = Column(Float, default=0.0)
+    cost         = Column(Float, default=0.0)   # always INR
     clicks       = Column(Integer, default=0)
     impressions  = Column(Integer, default=0)
     conversions  = Column(Float, default=0.0)
     ctr          = Column(Float, default=0.0)
-    avg_cpc      = Column(Float, default=0.0)
+    avg_cpc      = Column(Float, default=0.0)   # INR
     fetched_at   = Column(String)
 
 
@@ -71,7 +59,7 @@ class CurrencyConfig(Base):
     id               = Column(Integer, primary_key=True)
     usd_to_inr_rate  = Column(Float, default=90.0)
     display_currency = Column(String, default="INR")
-    admob_app_id     = Column(String, default="ALL")
+    admob_app_id     = Column(String, default="ALL")   # "ALL" or specific app_id
     admob_app_name   = Column(String, default="All Apps")
     updated_at       = Column(String)
 
@@ -114,17 +102,8 @@ def _seed_currency_config():
                 updated_at=datetime.utcnow().isoformat(),
             ))
             session.commit()
-    except Exception:
-        try:
-            session.rollback()
-        except Exception:
-            session.invalidate()
-        raise
     finally:
-        try:
-            session.close()
-        except Exception:
-            pass
+        session.close()
 
 
 # ── Currency config ──────────────────────────────────────────────────────
@@ -140,17 +119,8 @@ def get_currency_config() -> dict:
             "admob_app_name":   row.admob_app_name or "All Apps",
             "updated_at":       row.updated_at,
         }
-    except Exception:
-        try:
-            session.rollback()
-        except Exception:
-            session.invalidate()
-        raise
     finally:
-        try:
-            session.close()
-        except Exception:
-            pass
+        session.close()
 
 
 def update_currency_config(usd_to_inr_rate: float, display_currency: str,
@@ -164,40 +134,24 @@ def update_currency_config(usd_to_inr_rate: float, display_currency: str,
         row.admob_app_name   = admob_app_name
         row.updated_at       = datetime.utcnow().isoformat()
         session.commit()
-    except Exception:
-        try:
-            session.rollback()
-        except Exception:
-            session.invalidate()
-        raise
     finally:
-        try:
-            session.close()
-        except Exception:
-            pass
+        session.close()
 
 
 # ── Monthly FX rate overrides ────────────────────────────────────────────
 
 def get_all_monthly_fx_rates() -> dict:
+    """Returns {year_month: rate} for all months that have an override."""
     session = SessionLocal()
     try:
         rows = session.query(MonthlyFxRate).all()
         return {r.year_month: r.usd_to_inr for r in rows}
-    except Exception:
-        try:
-            session.rollback()
-        except Exception:
-            session.invalidate()
-        raise
     finally:
-        try:
-            session.close()
-        except Exception:
-            pass
+        session.close()
 
 
 def set_monthly_fx_rate(year_month: str, rate: float):
+    """Upsert a monthly override rate. year_month e.g. '2025-01'."""
     session = SessionLocal()
     try:
         row = session.query(MonthlyFxRate).filter_by(year_month=year_month).first()
@@ -211,39 +165,23 @@ def set_monthly_fx_rate(year_month: str, rate: float):
                 updated_at=datetime.utcnow().isoformat(),
             ))
         session.commit()
-    except Exception:
-        try:
-            session.rollback()
-        except Exception:
-            session.invalidate()
-        raise
     finally:
-        try:
-            session.close()
-        except Exception:
-            pass
+        session.close()
 
 
 def clear_monthly_fx_rate(year_month: str):
+    """Remove a monthly override so the month falls back to global rate."""
     session = SessionLocal()
     try:
         session.query(MonthlyFxRate).filter_by(year_month=year_month).delete()
         session.commit()
-    except Exception:
-        try:
-            session.rollback()
-        except Exception:
-            session.invalidate()
-        raise
     finally:
-        try:
-            session.close()
-        except Exception:
-            pass
+        session.close()
 
 
 def effective_rate(year_month: str, global_rate: float,
                    monthly_overrides: dict) -> float:
+    """Return the rate to use for a given month."""
     return monthly_overrides.get(year_month, global_rate)
 
 
@@ -269,17 +207,8 @@ def upsert_admob(data: dict):
         else:
             session.add(AdMobDaily(**data))
         session.commit()
-    except Exception:
-        try:
-            session.rollback()
-        except Exception:
-            session.invalidate()
-        raise
     finally:
-        try:
-            session.close()
-        except Exception:
-            pass
+        session.close()
 
 
 def upsert_google_ads(data: dict):
@@ -292,17 +221,8 @@ def upsert_google_ads(data: dict):
         else:
             session.add(GoogleAdsDaily(**data))
         session.commit()
-    except Exception:
-        try:
-            session.rollback()
-        except Exception:
-            session.invalidate()
-        raise
     finally:
-        try:
-            session.close()
-        except Exception:
-            pass
+        session.close()
 
 
 def log_fetch(target_date: date, source: str, status: str, message: str = ""):
@@ -316,17 +236,8 @@ def log_fetch(target_date: date, source: str, status: str, message: str = ""):
             message=message,
         ))
         session.commit()
-    except Exception:
-        try:
-            session.rollback()
-        except Exception:
-            session.invalidate()
-        raise
     finally:
-        try:
-            session.close()
-        except Exception:
-            pass
+        session.close()
 
 
 # ── Overall summary KPIs (aggregate query) ───────────────────────────────
@@ -334,6 +245,10 @@ def log_fetch(target_date: date, source: str, status: str, message: str = ""):
 def get_overall_summary(start: date, end: date,
                         global_rate: float, monthly_overrides: dict,
                         display: str) -> dict:
+    """
+    Aggregate KPIs for the full date range.
+    Uses per-month rates when available, global rate otherwise.
+    """
     session = SessionLocal()
     try:
         admob_rows = (
@@ -346,17 +261,8 @@ def get_overall_summary(start: date, end: date,
             .filter(GoogleAdsDaily.date >= start, GoogleAdsDaily.date <= end)
             .all()
         )
-    except Exception:
-        try:
-            session.rollback()
-        except Exception:
-            session.invalidate()
-        raise
     finally:
-        try:
-            session.close()
-        except Exception:
-            pass
+        session.close()
 
     revenue = 0.0
     spend   = 0.0
@@ -398,6 +304,10 @@ def get_overall_summary(start: date, end: date,
 def get_monthly_summary(start: date, end: date,
                         global_rate: float, monthly_overrides: dict,
                         display: str) -> pd.DataFrame:
+    """
+    One row per month. Each month uses its own effective rate.
+    Includes the effective rate used so the UI can display it.
+    """
     session = SessionLocal()
     try:
         admob_rows = (
@@ -410,19 +320,11 @@ def get_monthly_summary(start: date, end: date,
             .filter(GoogleAdsDaily.date >= start, GoogleAdsDaily.date <= end)
             .all()
         )
-    except Exception:
-        try:
-            session.rollback()
-        except Exception:
-            session.invalidate()
-        raise
     finally:
-        try:
-            session.close()
-        except Exception:
-            pass
+        session.close()
 
-    months = {}
+    # Aggregate per month
+    months = {}  # year_month -> dict
 
     def _get_month(ym, label):
         if ym not in months:
@@ -454,6 +356,20 @@ def get_monthly_summary(start: date, end: date,
         m["clicks_gads"] += r.clicks
         m["conversions"] += r.conversions
 
+    # Always include every month in the date range — even ones with zero data
+    # This ensures new months (e.g. June) appear immediately when the month starts
+    current = date(start.year, start.month, 1)
+    end_month = date(end.year, end.month, 1)
+    while current <= end_month:
+        ym    = current.strftime("%Y-%m")
+        label = current.strftime("%b %Y")
+        _get_month(ym, label)   # ensures month exists with zeros if no data
+        # advance to next month
+        if current.month == 12:
+            current = date(current.year + 1, 1, 1)
+        else:
+            current = date(current.year, current.month + 1, 1)
+
     if not months:
         return pd.DataFrame()
 
@@ -466,6 +382,7 @@ def get_monthly_summary(start: date, end: date,
 
 def get_daywise_for_month(year: int, month: int,
                           rate: float, display: str) -> pd.DataFrame:
+    """Fetches one month of day-wise data. rate is the effective rate for this month."""
     first_day = date(year, month, 1)
     last_day  = date(year, month, monthrange(year, month)[1])
 
@@ -481,17 +398,8 @@ def get_daywise_for_month(year: int, month: int,
             .filter(GoogleAdsDaily.date >= first_day, GoogleAdsDaily.date <= last_day)
             .all()
         )
-    except Exception:
-        try:
-            session.rollback()
-        except Exception:
-            session.invalidate()
-        raise
     finally:
-        try:
-            session.close()
-        except Exception:
-            pass
+        session.close()
 
     all_dates = pd.date_range(first_day, last_day, freq="D").date
     df = pd.DataFrame({"date": all_dates})
@@ -544,14 +452,5 @@ def get_last_fetch_logs(n: int = 10) -> pd.DataFrame:
             "status":     r.status,
             "message":    r.message,
         } for r in rows])
-    except Exception:
-        try:
-            session.rollback()
-        except Exception:
-            session.invalidate()
-        raise
     finally:
-        try:
-            session.close()
-        except Exception:
-            pass
+        session.close()

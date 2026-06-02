@@ -554,12 +554,12 @@ with st.sidebar:
     )
 
     today = date.today()
-    if   preset=="Last 3 months": ds,de=today.replace(day=1)-timedelta(days=90), today-timedelta(days=1)
-    elif preset=="Last 6 months": ds,de=today.replace(day=1)-timedelta(days=180),today-timedelta(days=1)
-    elif preset=="This year":     ds,de=date(today.year,1,1),                    today-timedelta(days=1)
-    elif preset=="Last 7 days":   ds,de=today-timedelta(days=7),                 today-timedelta(days=1)
-    elif preset=="Last 30 days":  ds,de=today-timedelta(days=30),                today-timedelta(days=1)
-    else:                         ds,de=today-timedelta(days=90),                today-timedelta(days=1)
+    if   preset=="Last 3 months": ds,de=today.replace(day=1)-timedelta(days=90), today
+    elif preset=="Last 6 months": ds,de=today.replace(day=1)-timedelta(days=180),today
+    elif preset=="This year":     ds,de=date(today.year,1,1),                    today
+    elif preset=="Last 7 days":   ds,de=today-timedelta(days=7),                 today
+    elif preset=="Last 30 days":  ds,de=today-timedelta(days=30),                today
+    else:                         ds,de=today-timedelta(days=90),                today
 
     dc1, dc2 = st.columns(2)
     with dc1: start_date = st.date_input("From", value=ds, max_value=today)
@@ -626,6 +626,12 @@ if "expanded_month" not in st.session_state:
     st.session_state.expanded_month = None
 if "sidebar_open" not in st.session_state:
     st.session_state.sidebar_open = True
+
+# IST-aware today — refresh button available after 12:00 AM IST not UTC
+import pytz as _pytz
+_ist_now  = __import__('datetime').datetime.now(_pytz.timezone("Asia/Kolkata"))
+today_ist = _ist_now.date()
+yesterday_ist = today_ist - timedelta(days=1)
 
 # ── Page header ───────────────────────────────────────────────────────────
 n_ov    = len(monthly_override)
@@ -826,7 +832,7 @@ for _, mrow in monthly_df.iterrows():
             for _, drow in day_df.iterrows():
                 _d       = drow["date"].date() if hasattr(drow["date"], "date") else drow["date"]
                 _missing = drow["revenue"] == 0 and drow["spend"] == 0
-                _is_past = _d < date.today()
+                _is_past = _d < today_ist
                 _dc      = st.columns([1.2, 1.1, 1.1, 1.1, 1.0, 0.9, 0.9, 0.8, 0.8, 0.6])
                 _pcolor  = GREEN if drow["profit"] >= 0 else RED
                 _VS      = f"font-size:.78rem;font-family:'DM Mono',monospace;padding:8px 0;display:block;color:{GRAY_700}"
